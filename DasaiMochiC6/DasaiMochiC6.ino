@@ -1,3 +1,9 @@
+// Forward declarations to avoid Arduino auto-prototype issues with custom types.
+enum class Expression : unsigned char;
+enum class TouchEvent : unsigned char;
+struct ExpressionConfig;
+struct NoteStep;
+
 #include <Arduino.h>
 #include <SPI.h>
 #include <Wire.h>
