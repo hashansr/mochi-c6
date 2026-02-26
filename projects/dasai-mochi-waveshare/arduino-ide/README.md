@@ -15,9 +15,25 @@ Sketch folder: `DasaiMochiC6/`
    - Adafruit ST7735 and ST7789 Library
 4. Open `DasaiMochiC6.ino`, compile, upload.
 
+## Controls
+- **Single tap**: cycle expressions (`IDLE -> HAPPY -> SLEEPY -> IDLE`)
+- **Double tap**: `ANGRY` expression
+- **Long press**: toggle **Clock mode** on/off
+
+## Sound profiles
+- Single tap, double tap, long press each have different tone patterns.
+- Clock enter/exit also has dedicated tones.
+
 ## Hardware defaults in sketch
 - LCD (Waveshare C6 LCD 1.47): GPIO6/7/14/15/21/22
 - Touch module I/O: GPIO2
 - Speaker: GPIO3
 
 If your touch/speaker use different pins, edit `PIN_TOUCH` and `PIN_SPEAKER` in the sketch.
+
+## Optional: real clock via NTP
+At the top of `DasaiMochiC6.ino`, set:
+- `WIFI_SSID`
+- `WIFI_PASS`
+
+If left empty, clock mode falls back to uptime-based `HH:MM:SS`.
