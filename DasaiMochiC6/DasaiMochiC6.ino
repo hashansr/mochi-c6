@@ -24,7 +24,8 @@ static constexpr int  DST_OFFSET_SEC = 0;
 // ==============================
 static constexpr uint8_t PIN_LCD_MOSI = 6;
 static constexpr uint8_t PIN_LCD_SCLK = 7;
-static constexpr int8_t  PIN_LCD_MISO = -1; // not used by LCD
+// Waveshare wiki wiring: MISO is GPIO5 (shared with TF card)
+static constexpr int8_t  PIN_LCD_MISO = 5;
 static constexpr uint8_t PIN_LCD_CS   = 14;
 static constexpr uint8_t PIN_LCD_DC   = 15;
 static constexpr uint8_t PIN_LCD_RST  = 21;
@@ -47,10 +48,17 @@ static constexpr uint32_t DOUBLE_TAP_GAP_MS = 280;
 static constexpr uint32_t LONG_PRESS_MS = 700;
 
 // ST7789 on 1.47 non-touch board often needs column offset on 172x320 panel.
-// If you still see vertical lines / shifted image, tune LCD_COL_OFFSET / LCD_ROW_OFFSET.
-static constexpr uint32_t LCD_SPI_HZ = 10000000; // conservative for stability
+// Waveshare wiki values: Offset_X=34, Offset_Y=0, SPI up to 80MHz.
+static constexpr uint32_t LCD_SPI_HZ = 40000000; // try 80MHz if stable on your unit
 static constexpr int8_t LCD_COL_OFFSET = 34;
 static constexpr int8_t LCD_ROW_OFFSET = 0;
+static constexpr uint8_t LCD_ROTATION = 0;
+static constexpr bool LCD_INVERT = true; // wiki init sends command 0x21 (invert on)
+
+// Backlight PWM (wiki-style)
+static constexpr uint16_t BK_PWM_FREQ = 1000;
+static constexpr uint8_t BK_PWM_RES_BITS = 10;
+static constexpr uint8_t BK_BRIGHTNESS_PERCENT = 100; // 0..100
 
 class WaveshareST7789 : public Adafruit_ST7789 {
 public:
@@ -154,12 +162,31 @@ uint16_t safeDelayScaled(uint16_t baseMs, uint16_t percent) {
   return static_cast<uint16_t>(scaled);
 }
 
-void drawMonoFrame(const uint8_t* frame, uint16_t width, uint16_t height, uint16_t color) {
+static inline uint8_t reverseBits8(uint8_t b) {
+  b = (b & 0xF0) >> 4 | (b & 0x0F) << 4;
+  b = (b & 0xCC) >> 2 | (b & 0x33) << 2;
+  b = (b & 0xAA) >> 1 | (b & 0x55) << 1;
+  return b;
+}
+
+void drawMonoFrameMSB(const uint8_t* frame, uint16_t width, uint16_t height, uint16_t color) {
   const int16_t x = (static_cast<int16_t>(tft.width()) - static_cast<int16_t>(width)) / 2;
   const int16_t y = (static_cast<int16_t>(tft.height()) - static_cast<int16_t>(height)) / 2;
 
   tft.fillScreen(ST77XX_BLACK);
   tft.drawBitmap(x, y, frame, width, height, color);
+}
+
+void drawMonoFrameXBM(const uint8_t* frame, uint16_t width, uint16_t height, uint16_t color) {
+  // upiir frames are XBM bit order (LSB first per byte).
+  // Adafruit drawBitmap expects MSB first, so convert once per frame.
+  static uint8_t converted[128 * 64 / 8]; // 1024 bytes for 128x64
+  const uint16_t bytes = (width * height) / 8;
+  for (uint16_t i = 0; i < bytes; i++) {
+    converted[i] = reverseBits8(frame[i]);
+  }
+
+  drawMonoFrameMSB(converted, width, height, color);
 }
 
 void drawCenteredText(const String& text, int16_t y, uint8_t size, uint16_t color) {
@@ -378,13 +405,13 @@ void renderExpressionFrame(uint32_t now) {
 
   if (cfg.useGif) {
     const AnimatedGIF* gif = &daichi_intro_gif;
-    drawMonoFrame(gif->frames[gGifFrameIndex], gif->width, gif->height, cfg.color);
+    drawMonoFrameMSB(gif->frames[gGifFrameIndex], gif->width, gif->height, cfg.color);
 
     const uint16_t baseDelay = gif->delays[gGifFrameIndex];
     gGifFrameIndex = (gGifFrameIndex + 1) % gif->frame_count;
     gNextFrameAt = now + safeDelayScaled(baseDelay, cfg.delayPercent);
   } else {
-    drawMonoFrame(kIdleAnimation.frames[gMonoFrameIndex], kIdleAnimation.width, kIdleAnimation.height, cfg.color);
+    drawMonoFrameXBM(kIdleAnimation.frames[gMonoFrameIndex], kIdleAnimation.width, kIdleAnimation.height, cfg.color);
 
     const uint16_t baseDelay = kIdleAnimation.delays[gMonoFrameIndex];
     gMonoFrameIndex = (gMonoFrameIndex + 1) % kIdleAnimation.frameCount;
@@ -450,8 +477,11 @@ void setup() {
   Serial.begin(115200);
   delay(200);
 
-  pinMode(PIN_LCD_BL, OUTPUT);
-  digitalWrite(PIN_LCD_BL, HIGH);
+  // Backlight (wiki style PWM control)
+  ledcAttach(PIN_LCD_BL, BK_PWM_FREQ, BK_PWM_RES_BITS);
+  const uint32_t bkMax = (1UL << BK_PWM_RES_BITS) - 1;
+  const uint32_t bkDuty = (bkMax * BK_BRIGHTNESS_PERCENT) / 100;
+  ledcWrite(PIN_LCD_BL, bkDuty);
 
   pinMode(PIN_SD_CS, OUTPUT);
   digitalWrite(PIN_SD_CS, HIGH);
@@ -464,7 +494,8 @@ void setup() {
   tft.init(LCD_WIDTH, LCD_HEIGHT, SPI_MODE0);
   tft.setSPISpeed(LCD_SPI_HZ);
   tft.applyPanelOffset(LCD_COL_OFFSET, LCD_ROW_OFFSET);
-  tft.setRotation(0); // 172x320 portrait
+  tft.setRotation(LCD_ROTATION);
+  tft.invertDisplay(LCD_INVERT);
   tft.fillScreen(ST77XX_BLACK);
 
   runDisplaySelfTest();
