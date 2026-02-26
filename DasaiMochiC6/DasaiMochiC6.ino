@@ -9,7 +9,14 @@ struct NoteStep;
 #include <Wire.h>
 #include <WiFi.h>
 #include <time.h>
-#include <Arduino_GFX_Library.h>
+
+#if __has_include(<Arduino_GFX_Library.h>)
+  #include <Arduino_GFX_Library.h>
+#elif __has_include(<Arduino_GFX.h>)
+  #include <Arduino_GFX.h>
+#else
+  #error "Arduino_GFX library not found. Install 'GFX Library for Arduino' and ensure Arduino sees your sketchbook libraries."
+#endif
 
 #include "upiir_sample_frames.h"      // from #2 (upiir) subset
 #include "huykhoong_daichi_intro.h"  // from #1 (huykhoong)
