@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <SPI.h>
+#include <Wire.h>
 #include <WiFi.h>
 #include <time.h>
 #include <Adafruit_GFX.h>
@@ -18,26 +19,29 @@ static constexpr long UTC_OFFSET_SEC = 0;
 static constexpr int  DST_OFFSET_SEC = 0;
 
 // ==============================
-// Waveshare ESP32-C6-LCD-1.47 pins (from Waveshare wiki)
-// NOTE: this sketch is for NON-TOUCH 1.47 (ST7789).
-// If your board is Touch-LCD-1.47 (JD9853), use a JD9853 driver instead.
+// Waveshare ESP32-C6-Touch-LCD-1.47 (wiki/demo aligned)
+// Display chip: JD9853, Touch chip: AXS5106L
 // ==============================
-static constexpr uint8_t PIN_LCD_MOSI = 6;
-static constexpr uint8_t PIN_LCD_SCLK = 7;
-// Waveshare wiki wiring: MISO is GPIO5 (shared with TF card)
-static constexpr int8_t  PIN_LCD_MISO = 5;
+static constexpr uint8_t PIN_LCD_MOSI = 2;
+static constexpr uint8_t PIN_LCD_SCLK = 1;
+static constexpr int8_t  PIN_LCD_MISO = -1;
 static constexpr uint8_t PIN_LCD_CS   = 14;
 static constexpr uint8_t PIN_LCD_DC   = 15;
-static constexpr uint8_t PIN_LCD_RST  = 21;
-static constexpr uint8_t PIN_LCD_BL   = 22;
+static constexpr uint8_t PIN_LCD_RST  = 22;
+static constexpr uint8_t PIN_LCD_BL   = 23;
 
-// Onboard TF card CS (set HIGH to keep SD inactive on shared SPI bus)
+// Built-in touch (AXS5106L)
+static constexpr uint8_t PIN_TOUCH_SDA = 18;
+static constexpr uint8_t PIN_TOUCH_SCL = 19;
+static constexpr uint8_t PIN_TOUCH_RST = 20;
+static constexpr uint8_t PIN_TOUCH_INT = 21;
+static constexpr uint8_t TOUCH_I2C_ADDR = 0x63;
+
+// Onboard TF card CS (touch board uses shared SPI pins too)
 static constexpr uint8_t PIN_SD_CS = 4;
 
-// External modules (change if your wiring is different)
-static constexpr uint8_t PIN_TOUCH = 2;   // touch module I/O
+// External modules
 static constexpr uint8_t PIN_SPEAKER = 3; // small speaker
-static constexpr bool TOUCH_ACTIVE_HIGH = true;
 
 static constexpr uint16_t LCD_WIDTH = 172;
 static constexpr uint16_t LCD_HEIGHT = 320;
@@ -47,9 +51,9 @@ static constexpr uint32_t TOUCH_DEBOUNCE_MS = 30;
 static constexpr uint32_t DOUBLE_TAP_GAP_MS = 280;
 static constexpr uint32_t LONG_PRESS_MS = 700;
 
-// ST7789 on 1.47 non-touch board often needs column offset on 172x320 panel.
-// Waveshare wiki values: Offset_X=34, Offset_Y=0, SPI up to 80MHz.
-static constexpr uint32_t LCD_SPI_HZ = 40000000; // try 80MHz if stable on your unit
+// Touch 1.47 demo uses col/row offsets 34/0 and custom JD9853 init commands.
+// SPI can go higher; keep moderate default first for stability.
+static constexpr uint32_t LCD_SPI_HZ = 40000000;
 static constexpr int8_t LCD_COL_OFFSET = 34;
 static constexpr int8_t LCD_ROW_OFFSET = 0;
 static constexpr uint8_t LCD_ROTATION = 0;
@@ -69,6 +73,17 @@ public:
 };
 
 WaveshareST7789 tft(&SPI, PIN_LCD_CS, PIN_LCD_DC, PIN_LCD_RST);
+
+struct TouchPoint {
+  uint16_t x;
+  uint16_t y;
+};
+
+volatile bool gTouchIntFlag = false;
+
+void IRAM_ATTR onTouchInt() {
+  gTouchIntFlag = true;
+}
 
 struct MonoAnimation {
   uint16_t frameCount;
@@ -201,6 +216,53 @@ void drawCenteredText(const String& text, int16_t y, uint8_t size, uint16_t colo
   tft.print(text);
 }
 
+void jd9853InitByWaveshareSequence() {
+  auto send = [](uint8_t cmd, const uint8_t* data, uint8_t len) {
+    tft.sendCommand(cmd, data, len);
+  };
+
+  tft.sendCommand(0x11); // sleep out
+  delay(120);
+
+  { const uint8_t d[] = {0x98, 0x53}; send(0xDF, d, sizeof(d)); }
+  { const uint8_t d[] = {0x23}; send(0xB2, d, sizeof(d)); }
+  { const uint8_t d[] = {0x00,0x47,0x00,0x6F}; send(0xB7, d, sizeof(d)); }
+  { const uint8_t d[] = {0x1C,0x1A,0x55,0x73,0x63,0xF0}; send(0xBB, d, sizeof(d)); }
+  { const uint8_t d[] = {0x44,0xA4}; send(0xC0, d, sizeof(d)); }
+  { const uint8_t d[] = {0x16}; send(0xC1, d, sizeof(d)); }
+  { const uint8_t d[] = {0x7D,0x07,0x14,0x06,0xCF,0x71,0x72,0x77}; send(0xC3, d, sizeof(d)); }
+  { const uint8_t d[] = {0x00,0x00,0xA0,0x79,0x0B,0x0A,0x16,0x79,0x0B,0x0A,0x16,0x82}; send(0xC4, d, sizeof(d)); }
+  { const uint8_t d[] = {
+      0x3F,0x32,0x29,0x29,0x27,0x2B,0x27,0x28,0x28,0x26,0x25,0x17,0x12,0x0D,0x04,0x00,
+      0x3F,0x32,0x29,0x29,0x27,0x2B,0x27,0x28,0x28,0x26,0x25,0x17,0x12,0x0D,0x04,0x00};
+    send(0xC8, d, sizeof(d)); }
+  { const uint8_t d[] = {0x04,0x06,0x6B,0x0F,0x00}; send(0xD0, d, sizeof(d)); }
+  { const uint8_t d[] = {0x00,0x30}; send(0xD7, d, sizeof(d)); }
+  { const uint8_t d[] = {0x14}; send(0xE6, d, sizeof(d)); }
+  { const uint8_t d[] = {0x01}; send(0xDE, d, sizeof(d)); }
+  { const uint8_t d[] = {0x03,0x13,0xEF,0x35,0x35}; send(0xB7, d, sizeof(d)); }
+  { const uint8_t d[] = {0x14,0x15,0xC0}; send(0xC1, d, sizeof(d)); }
+  { const uint8_t d[] = {0x06,0x3A}; send(0xC2, d, sizeof(d)); }
+  { const uint8_t d[] = {0x72,0x12}; send(0xC4, d, sizeof(d)); }
+  { const uint8_t d[] = {0x00}; send(0xBE, d, sizeof(d)); }
+  { const uint8_t d[] = {0x02}; send(0xDE, d, sizeof(d)); }
+  { const uint8_t d[] = {0x00,0x02,0x00}; send(0xE5, d, sizeof(d)); }
+  { const uint8_t d[] = {0x01,0x02,0x00}; send(0xE5, d, sizeof(d)); }
+  { const uint8_t d[] = {0x00}; send(0xDE, d, sizeof(d)); }
+  { const uint8_t d[] = {0x00}; send(0x35, d, sizeof(d)); }
+  { const uint8_t d[] = {0x05}; send(0x3A, d, sizeof(d)); }
+  { const uint8_t d[] = {0x00,0x22,0x00,0xCD}; send(0x2A, d, sizeof(d)); }
+  { const uint8_t d[] = {0x00,0x00,0x01,0x3F}; send(0x2B, d, sizeof(d)); }
+  { const uint8_t d[] = {0x02}; send(0xDE, d, sizeof(d)); }
+  { const uint8_t d[] = {0x00,0x02,0x00}; send(0xE5, d, sizeof(d)); }
+  { const uint8_t d[] = {0x00}; send(0xDE, d, sizeof(d)); }
+  { const uint8_t d[] = {0x00}; send(0x36, d, sizeof(d)); }
+
+  tft.sendCommand(0x21); // invert on
+  delay(10);
+  tft.sendCommand(0x29); // display on
+}
+
 void runDisplaySelfTest() {
   // 1) solid fills
   tft.fillScreen(ST77XX_RED);
@@ -304,8 +366,75 @@ void soundTick(uint32_t now) {
   soundStartStep(now);
 }
 
+void initBuiltInTouch() {
+  pinMode(PIN_TOUCH_RST, OUTPUT);
+  pinMode(PIN_TOUCH_INT, INPUT_PULLUP);
+
+  digitalWrite(PIN_TOUCH_RST, LOW);
+  delay(120);
+  digitalWrite(PIN_TOUCH_RST, HIGH);
+  delay(220);
+
+  Wire.begin(PIN_TOUCH_SDA, PIN_TOUCH_SCL);
+  attachInterrupt(digitalPinToInterrupt(PIN_TOUCH_INT), onTouchInt, FALLING);
+
+  // Optional: probe ID register 0x08
+  Wire.beginTransmission(TOUCH_I2C_ADDR);
+  Wire.write(0x08);
+  if (Wire.endTransmission() == 0 && Wire.requestFrom(static_cast<int>(TOUCH_I2C_ADDR), 1) == 1) {
+    const uint8_t id = Wire.read();
+    Serial.printf("[touch] AXS5106L ID: 0x%02X\n", id);
+  } else {
+    Serial.println("[touch] AXS5106L ID probe failed (will still try runtime reads)");
+  }
+}
+
+bool readBuiltInTouchPressed(TouchPoint &p) {
+  // Fast path: only read when interrupt fired (or force read every ~60ms when idle)
+  static uint32_t lastForcedRead = 0;
+  const uint32_t now = millis();
+  const bool shouldRead = gTouchIntFlag || (now - lastForcedRead > 60);
+  if (!shouldRead) return false;
+
+  gTouchIntFlag = false;
+  lastForcedRead = now;
+
+  uint8_t data[14] = {0};
+  Wire.beginTransmission(TOUCH_I2C_ADDR);
+  Wire.write(0x01); // touch data reg
+  if (Wire.endTransmission() != 0) return false;
+  if (Wire.requestFrom(static_cast<int>(TOUCH_I2C_ADDR), 14) != 14) return false;
+  for (uint8_t i = 0; i < 14; i++) data[i] = Wire.read();
+
+  const uint8_t touchNum = data[1];
+  if (touchNum == 0) return false;
+
+  uint16_t x = ((static_cast<uint16_t>(data[2] & 0x0F)) << 8) | data[3];
+  uint16_t y = ((static_cast<uint16_t>(data[4] & 0x0F)) << 8) | data[5];
+
+  // Rotation mapping from Waveshare driver (default rotation=0)
+  if (LCD_ROTATION == 1) {
+    uint16_t ox = x, oy = y;
+    y = ox;
+    x = oy;
+  } else if (LCD_ROTATION == 2) {
+    y = LCD_HEIGHT - 1 - y;
+  } else if (LCD_ROTATION == 3) {
+    uint16_t ox = x, oy = y;
+    y = LCD_HEIGHT - 1 - ox;
+    x = LCD_WIDTH - 1 - oy;
+  } else {
+    x = LCD_WIDTH - 1 - x;
+  }
+
+  p.x = x;
+  p.y = y;
+  return true;
+}
+
 TouchEvent pollTouchEvent(uint32_t now) {
-  const bool rawPressed = digitalRead(PIN_TOUCH) == (TOUCH_ACTIVE_HIGH ? HIGH : LOW);
+  TouchPoint tp{};
+  const bool rawPressed = readBuiltInTouchPressed(tp);
 
   if (rawPressed != gTouchLastRaw) {
     gTouchLastRaw = rawPressed;
@@ -486,7 +615,6 @@ void setup() {
   pinMode(PIN_SD_CS, OUTPUT);
   digitalWrite(PIN_SD_CS, HIGH);
 
-  pinMode(PIN_TOUCH, INPUT);
   pinMode(PIN_SPEAKER, OUTPUT);
 
   SPI.begin(PIN_LCD_SCLK, PIN_LCD_MISO, PIN_LCD_MOSI, PIN_LCD_CS);
@@ -494,9 +622,12 @@ void setup() {
   tft.init(LCD_WIDTH, LCD_HEIGHT, SPI_MODE0);
   tft.setSPISpeed(LCD_SPI_HZ);
   tft.applyPanelOffset(LCD_COL_OFFSET, LCD_ROW_OFFSET);
+  jd9853InitByWaveshareSequence();
   tft.setRotation(LCD_ROTATION);
   tft.invertDisplay(LCD_INVERT);
   tft.fillScreen(ST77XX_BLACK);
+
+  initBuiltInTouch();
 
   runDisplaySelfTest();
   playSound(SND_STARTUP, sizeof(SND_STARTUP) / sizeof(SND_STARTUP[0]));

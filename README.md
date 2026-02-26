@@ -1,7 +1,7 @@
 # mochi-c6
 
-Dasai Mochi-style faces for **Waveshare ESP32-C6-LCD-1.47** with:
-(Aligned to Waveshare wiki pin map/offset guidance: https://www.waveshare.com/wiki/ESP32-C6-LCD-1.47)
+Dasai Mochi-style faces for **Waveshare ESP32-C6-Touch-LCD-1.47** with:
+(Aligned to Waveshare touch wiki pin map/driver guidance: https://www.waveshare.com/wiki/ESP32-C6-Touch-LCD-1.47)
 - expression state machine (`IDLE`, `HAPPY`, `ANGRY`, `SLEEPY`)
 - touch gestures (single tap / double tap / long press)
 - per-gesture sound profiles
@@ -30,26 +30,25 @@ Dasai Mochi-style faces for **Waveshare ESP32-C6-LCD-1.47** with:
 
 ## 2) Wiring
 
-### LCD (Waveshare ESP32-C6-LCD-1.47 onboard)
-Configured to match Waveshare wiki demo:
-- MISO GPIO5
-- MOSI GPIO6
-- SCLK GPIO7
-- CS GPIO14
-- DC GPIO15
-- RST GPIO21
-- BL GPIO22
+### LCD + Touch (Waveshare ESP32-C6-Touch-LCD-1.47 onboard)
+Configured to match Waveshare touch demo:
+- LCD MOSI GPIO2
+- LCD SCLK GPIO1
+- LCD CS GPIO14
+- LCD DC GPIO15
+- LCD RST GPIO22
+- LCD BL GPIO23
+- Touch SDA GPIO18
+- Touch SCL GPIO19
+- Touch RST GPIO20
+- Touch INT GPIO21
 - panel offsets: `X=34`, `Y=0`
 
-### External modules
-Default pins in sketch:
-- Touch sensor I/O → `GPIO2`
+### External module
+Default pin in sketch:
 - Speaker signal → `GPIO3`
 
-If different, edit these in `DasaiMochiC6.ino`:
-- `PIN_TOUCH`
-- `PIN_SPEAKER`
-- `TOUCH_ACTIVE_HIGH` (set `false` if your sensor is active-low)
+If different, edit `PIN_SPEAKER` in `DasaiMochiC6.ino`.
 
 ---
 
@@ -97,15 +96,15 @@ Try these in `DasaiMochiC6.ino`:
 Note: idle frames are XBM bitmaps and are converted to proper bit order in code (to avoid stripe artifacts).
 
 Important board note:
-- This sketch targets **ESP32-C6-LCD-1.47 (non-touch, ST7789)**.
-- If your board is **ESP32-C6-Touch-LCD-1.47 (JD9853)**, this ST7789 sketch will not render correctly and needs a JD9853 driver path.
+- This sketch now targets **ESP32-C6-Touch-LCD-1.47 (JD9853 + AXS5106L)**.
+- If you use **ESP32-C6-LCD-1.47 non-touch (ST7789)**, you need the non-touch pin/driver variant.
 
 ---
 
 ## 7) “Complete the INO” checklist
 
 - [ ] Set WiFi SSID/PASS for real clock
-- [ ] Confirm touch polarity (`TOUCH_ACTIVE_HIGH`)
+- [ ] Verify built-in touch gestures (single/double/long press)
 - [ ] Confirm speaker pin / volume (use transistor if needed)
 - [ ] Tune expression hold times / animation speeds
 - [ ] Replace sample faces with your own converted assets
