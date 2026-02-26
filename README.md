@@ -23,8 +23,7 @@ Dasai Mochi-style faces for **Waveshare ESP32-C6-Touch-LCD-1.47** with:
 2. Install board package: **esp32 by Espressif Systems** (v3.x+).
 3. Board selection: **ESP32C6 Dev Module**.
 4. Install libraries:
-   - **Adafruit GFX Library**
-   - **Adafruit ST7735 and ST7789 Library**
+   - **GFX Library for Arduino** (Arduino_GFX_Library)
 
 ---
 

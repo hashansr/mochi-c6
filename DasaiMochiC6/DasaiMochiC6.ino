@@ -9,8 +9,7 @@ struct NoteStep;
 #include <Wire.h>
 #include <WiFi.h>
 #include <time.h>
-#include <Adafruit_GFX.h>
-#include <Adafruit_ST7789.h>
+#include <Arduino_GFX_Library.h>
 
 #include "upiir_sample_frames.h"      // from #2 (upiir) subset
 #include "huykhoong_daichi_intro.h"  // from #1 (huykhoong)
@@ -63,27 +62,38 @@ static constexpr uint32_t LONG_PRESS_MS = 700;
 static constexpr uint32_t BOOT_DEBOUNCE_MS = 30;
 
 // Touch 1.47 demo uses col/row offsets 34/0 and custom JD9853 init commands.
-// SPI can go higher; keep moderate default first for stability.
-static constexpr uint32_t LCD_SPI_HZ = 40000000;
 static constexpr int8_t LCD_COL_OFFSET = 34;
 static constexpr int8_t LCD_ROW_OFFSET = 0;
 static constexpr uint8_t LCD_ROTATION = 0;
-static constexpr bool LCD_INVERT = true; // wiki init sends command 0x21 (invert on)
 
-// Backlight PWM (wiki-style)
-static constexpr uint16_t BK_PWM_FREQ = 1000;
-static constexpr uint8_t BK_PWM_RES_BITS = 10;
-static constexpr uint8_t BK_BRIGHTNESS_PERCENT = 100; // 0..100
+// Color aliases (to keep existing drawing code readable)
+#ifndef ST77XX_BLACK
+#define ST77XX_BLACK RGB565_BLACK
+#define ST77XX_WHITE RGB565_WHITE
+#define ST77XX_RED RGB565_RED
+#define ST77XX_GREEN RGB565_GREEN
+#define ST77XX_BLUE RGB565_BLUE
+#define ST77XX_CYAN RGB565_CYAN
+#define ST77XX_MAGENTA RGB565_MAGENTA
+#define ST77XX_YELLOW RGB565_YELLOW
+#define ST77XX_ORANGE RGB565_ORANGE
+#endif
 
-class WaveshareST7789 : public Adafruit_ST7789 {
-public:
-  WaveshareST7789(SPIClass *spiClass, int8_t cs, int8_t dc, int8_t rst)
-      : Adafruit_ST7789(spiClass, cs, dc, rst) {}
+Arduino_DataBus *bus = new Arduino_HWSPI(PIN_LCD_DC, PIN_LCD_CS, PIN_LCD_SCLK, PIN_LCD_MOSI);
+Arduino_GFX *gfx = new Arduino_ST7789(
+  bus,
+  PIN_LCD_RST,
+  0 /* rotation */,
+  false /* ips */,
+  LCD_WIDTH,
+  LCD_HEIGHT,
+  LCD_COL_OFFSET,
+  LCD_ROW_OFFSET,
+  LCD_COL_OFFSET,
+  LCD_ROW_OFFSET
+);
 
-  void applyPanelOffset(int8_t col, int8_t row) { setColRowStart(col, row); }
-};
-
-WaveshareST7789 tft(&SPI, PIN_LCD_CS, PIN_LCD_DC, PIN_LCD_RST);
+#define tft (*gfx)
 
 struct TouchPoint {
   uint16_t x;
@@ -224,59 +234,98 @@ void drawCenteredText(const String& text, int16_t y, uint8_t size, uint16_t colo
   tft.setTextSize(size);
   tft.setTextColor(color);
 
-  int16_t x1, y1;
-  uint16_t w, h;
-  tft.getTextBounds(text.c_str(), 0, y, &x1, &y1, &w, &h);
-  int16_t x = (static_cast<int16_t>(tft.width()) - static_cast<int16_t>(w)) / 2;
+  // 6px wide per default font char (plus scale)
+  const int16_t w = static_cast<int16_t>(text.length() * 6 * size);
+  int16_t x = (static_cast<int16_t>(tft.width()) - w) / 2;
+  if (x < 0) x = 0;
   tft.setCursor(x, y);
   tft.print(text);
 }
 
 void jd9853InitByWaveshareSequence() {
-  auto send = [](uint8_t cmd, const uint8_t* data, uint8_t len) {
-    tft.sendCommand(cmd, data, len);
+  // Directly from Waveshare Touch-LCD-1.47 Arduino example (batch init path)
+  static const uint8_t init_operations[] = {
+    BEGIN_WRITE,
+    WRITE_COMMAND_8, 0x11,
+    END_WRITE,
+    DELAY, 120,
+
+    BEGIN_WRITE,
+    WRITE_C8_D16, 0xDF, 0x98, 0x53,
+    WRITE_C8_D8, 0xB2, 0x23,
+
+    WRITE_COMMAND_8, 0xB7,
+    WRITE_BYTES, 4, 0x00, 0x47, 0x00, 0x6F,
+
+    WRITE_COMMAND_8, 0xBB,
+    WRITE_BYTES, 6, 0x1C, 0x1A, 0x55, 0x73, 0x63, 0xF0,
+
+    WRITE_C8_D16, 0xC0, 0x44, 0xA4,
+    WRITE_C8_D8, 0xC1, 0x16,
+
+    WRITE_COMMAND_8, 0xC3,
+    WRITE_BYTES, 8, 0x7D, 0x07, 0x14, 0x06, 0xCF, 0x71, 0x72, 0x77,
+
+    WRITE_COMMAND_8, 0xC4,
+    WRITE_BYTES, 12, 0x00, 0x00, 0xA0, 0x79, 0x0B, 0x0A, 0x16, 0x79, 0x0B, 0x0A, 0x16, 0x82,
+
+    WRITE_COMMAND_8, 0xC8,
+    WRITE_BYTES, 32,
+    0x3F, 0x32, 0x29, 0x29, 0x27, 0x2B, 0x27, 0x28, 0x28, 0x26, 0x25, 0x17, 0x12, 0x0D, 0x04, 0x00,
+    0x3F, 0x32, 0x29, 0x29, 0x27, 0x2B, 0x27, 0x28, 0x28, 0x26, 0x25, 0x17, 0x12, 0x0D, 0x04, 0x00,
+
+    WRITE_COMMAND_8, 0xD0,
+    WRITE_BYTES, 5, 0x04, 0x06, 0x6B, 0x0F, 0x00,
+
+    WRITE_C8_D16, 0xD7, 0x00, 0x30,
+    WRITE_C8_D8, 0xE6, 0x14,
+    WRITE_C8_D8, 0xDE, 0x01,
+
+    WRITE_COMMAND_8, 0xB7,
+    WRITE_BYTES, 5, 0x03, 0x13, 0xEF, 0x35, 0x35,
+
+    WRITE_COMMAND_8, 0xC1,
+    WRITE_BYTES, 3, 0x14, 0x15, 0xC0,
+
+    WRITE_C8_D16, 0xC2, 0x06, 0x3A,
+    WRITE_C8_D16, 0xC4, 0x72, 0x12,
+    WRITE_C8_D8, 0xBE, 0x00,
+    WRITE_C8_D8, 0xDE, 0x02,
+
+    WRITE_COMMAND_8, 0xE5,
+    WRITE_BYTES, 3, 0x00, 0x02, 0x00,
+
+    WRITE_COMMAND_8, 0xE5,
+    WRITE_BYTES, 3, 0x01, 0x02, 0x00,
+
+    WRITE_C8_D8, 0xDE, 0x00,
+    WRITE_C8_D8, 0x35, 0x00,
+    WRITE_C8_D8, 0x3A, 0x05,
+
+    WRITE_COMMAND_8, 0x2A,
+    WRITE_BYTES, 4, 0x00, 0x22, 0x00, 0xCD,
+
+    WRITE_COMMAND_8, 0x2B,
+    WRITE_BYTES, 4, 0x00, 0x00, 0x01, 0x3F,
+
+    WRITE_C8_D8, 0xDE, 0x02,
+
+    WRITE_COMMAND_8, 0xE5,
+    WRITE_BYTES, 3, 0x00, 0x02, 0x00,
+
+    WRITE_C8_D8, 0xDE, 0x00,
+    WRITE_C8_D8, 0x36, 0x00,
+    WRITE_COMMAND_8, 0x21,
+    END_WRITE,
+
+    DELAY, 10,
+
+    BEGIN_WRITE,
+    WRITE_COMMAND_8, 0x29,
+    END_WRITE
   };
 
-  tft.sendCommand(0x11); // sleep out
-  delay(120);
-
-  { const uint8_t d[] = {0x98, 0x53}; send(0xDF, d, sizeof(d)); }
-  { const uint8_t d[] = {0x23}; send(0xB2, d, sizeof(d)); }
-  { const uint8_t d[] = {0x00,0x47,0x00,0x6F}; send(0xB7, d, sizeof(d)); }
-  { const uint8_t d[] = {0x1C,0x1A,0x55,0x73,0x63,0xF0}; send(0xBB, d, sizeof(d)); }
-  { const uint8_t d[] = {0x44,0xA4}; send(0xC0, d, sizeof(d)); }
-  { const uint8_t d[] = {0x16}; send(0xC1, d, sizeof(d)); }
-  { const uint8_t d[] = {0x7D,0x07,0x14,0x06,0xCF,0x71,0x72,0x77}; send(0xC3, d, sizeof(d)); }
-  { const uint8_t d[] = {0x00,0x00,0xA0,0x79,0x0B,0x0A,0x16,0x79,0x0B,0x0A,0x16,0x82}; send(0xC4, d, sizeof(d)); }
-  { const uint8_t d[] = {
-      0x3F,0x32,0x29,0x29,0x27,0x2B,0x27,0x28,0x28,0x26,0x25,0x17,0x12,0x0D,0x04,0x00,
-      0x3F,0x32,0x29,0x29,0x27,0x2B,0x27,0x28,0x28,0x26,0x25,0x17,0x12,0x0D,0x04,0x00};
-    send(0xC8, d, sizeof(d)); }
-  { const uint8_t d[] = {0x04,0x06,0x6B,0x0F,0x00}; send(0xD0, d, sizeof(d)); }
-  { const uint8_t d[] = {0x00,0x30}; send(0xD7, d, sizeof(d)); }
-  { const uint8_t d[] = {0x14}; send(0xE6, d, sizeof(d)); }
-  { const uint8_t d[] = {0x01}; send(0xDE, d, sizeof(d)); }
-  { const uint8_t d[] = {0x03,0x13,0xEF,0x35,0x35}; send(0xB7, d, sizeof(d)); }
-  { const uint8_t d[] = {0x14,0x15,0xC0}; send(0xC1, d, sizeof(d)); }
-  { const uint8_t d[] = {0x06,0x3A}; send(0xC2, d, sizeof(d)); }
-  { const uint8_t d[] = {0x72,0x12}; send(0xC4, d, sizeof(d)); }
-  { const uint8_t d[] = {0x00}; send(0xBE, d, sizeof(d)); }
-  { const uint8_t d[] = {0x02}; send(0xDE, d, sizeof(d)); }
-  { const uint8_t d[] = {0x00,0x02,0x00}; send(0xE5, d, sizeof(d)); }
-  { const uint8_t d[] = {0x01,0x02,0x00}; send(0xE5, d, sizeof(d)); }
-  { const uint8_t d[] = {0x00}; send(0xDE, d, sizeof(d)); }
-  { const uint8_t d[] = {0x00}; send(0x35, d, sizeof(d)); }
-  { const uint8_t d[] = {0x05}; send(0x3A, d, sizeof(d)); }
-  { const uint8_t d[] = {0x00,0x22,0x00,0xCD}; send(0x2A, d, sizeof(d)); }
-  { const uint8_t d[] = {0x00,0x00,0x01,0x3F}; send(0x2B, d, sizeof(d)); }
-  { const uint8_t d[] = {0x02}; send(0xDE, d, sizeof(d)); }
-  { const uint8_t d[] = {0x00,0x02,0x00}; send(0xE5, d, sizeof(d)); }
-  { const uint8_t d[] = {0x00}; send(0xDE, d, sizeof(d)); }
-  { const uint8_t d[] = {0x00}; send(0x36, d, sizeof(d)); }
-
-  tft.sendCommand(0x21); // invert on
-  delay(10);
-  tft.sendCommand(0x29); // display on
+  bus->batchOperation(init_operations, sizeof(init_operations));
 }
 
 void runDisplaySelfTest() {
@@ -646,11 +695,9 @@ void setup() {
   Serial.begin(115200);
   delay(200);
 
-  // Backlight (wiki style PWM control)
-  ledcAttach(PIN_LCD_BL, BK_PWM_FREQ, BK_PWM_RES_BITS);
-  const uint32_t bkMax = (1UL << BK_PWM_RES_BITS) - 1;
-  const uint32_t bkDuty = (bkMax * BK_BRIGHTNESS_PERCENT) / 100;
-  ledcWrite(PIN_LCD_BL, bkDuty);
+  // Backlight on (wiki hello-world style)
+  pinMode(PIN_LCD_BL, OUTPUT);
+  digitalWrite(PIN_LCD_BL, HIGH);
 
   pinMode(PIN_SD_CS, OUTPUT);
   digitalWrite(PIN_SD_CS, HIGH);
@@ -663,14 +710,12 @@ void setup() {
   gBootStable = bootNow;
   gBootLastChangeMs = millis();
 
-  SPI.begin(PIN_LCD_SCLK, PIN_LCD_MISO, PIN_LCD_MOSI, PIN_LCD_CS);
+  if (!gfx->begin()) {
+    Serial.println("[display] gfx->begin() failed");
+  }
 
-  tft.init(LCD_WIDTH, LCD_HEIGHT, SPI_MODE0);
-  tft.setSPISpeed(LCD_SPI_HZ);
-  tft.applyPanelOffset(LCD_COL_OFFSET, LCD_ROW_OFFSET);
   jd9853InitByWaveshareSequence();
   tft.setRotation(LCD_ROTATION);
-  tft.invertDisplay(LCD_INVERT);
   tft.fillScreen(ST77XX_BLACK);
 
   initBuiltInTouch();
