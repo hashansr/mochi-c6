@@ -80,12 +80,19 @@ If left empty, clock mode still works but shows uptime-based time instead of NTP
 
 ---
 
-## 6) If display looks wrong
+## 6) If display looks wrong (vertical lines / bad render)
 
-Common fixes in sketch:
+The sketch now runs an automatic **SELF TEST** screen on boot.
+If this self-test already shows lines/artifacts, it is driver/panel setup (not animation code).
+
+Try these in `DasaiMochiC6.ino`:
+- `LCD_SPI_HZ` → lower to `8000000` or `4000000`
+- `LCD_COL_OFFSET` / `LCD_ROW_OFFSET` (panel offset tuning)
 - `tft.setRotation(0..3)`
-- color order init (if needed): `tft.init(172, 320);`
-- small x/y offsets (panel-dependent) by shifting draw position in `drawMonoFrame(...)`
+
+Important board note:
+- This sketch targets **ESP32-C6-LCD-1.47 (non-touch, ST7789)**.
+- If your board is **ESP32-C6-Touch-LCD-1.47 (JD9853)**, this ST7789 sketch will not render correctly and needs a JD9853 driver path.
 
 ---
 

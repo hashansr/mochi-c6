@@ -19,6 +19,8 @@ static constexpr int  DST_OFFSET_SEC = 0;
 
 // ==============================
 // Waveshare ESP32-C6-LCD-1.47 pins (from Waveshare wiki)
+// NOTE: this sketch is for NON-TOUCH 1.47 (ST7789).
+// If your board is Touch-LCD-1.47 (JD9853), use a JD9853 driver instead.
 // ==============================
 static constexpr uint8_t PIN_LCD_MOSI = 6;
 static constexpr uint8_t PIN_LCD_SCLK = 7;
@@ -44,7 +46,21 @@ static constexpr uint32_t TOUCH_DEBOUNCE_MS = 30;
 static constexpr uint32_t DOUBLE_TAP_GAP_MS = 280;
 static constexpr uint32_t LONG_PRESS_MS = 700;
 
-Adafruit_ST7789 tft(&SPI, PIN_LCD_CS, PIN_LCD_DC, PIN_LCD_RST);
+// ST7789 on 1.47 non-touch board often needs column offset on 172x320 panel.
+// If you still see vertical lines / shifted image, tune LCD_COL_OFFSET / LCD_ROW_OFFSET.
+static constexpr uint32_t LCD_SPI_HZ = 10000000; // conservative for stability
+static constexpr int8_t LCD_COL_OFFSET = 34;
+static constexpr int8_t LCD_ROW_OFFSET = 0;
+
+class WaveshareST7789 : public Adafruit_ST7789 {
+public:
+  WaveshareST7789(SPIClass *spiClass, int8_t cs, int8_t dc, int8_t rst)
+      : Adafruit_ST7789(spiClass, cs, dc, rst) {}
+
+  void applyPanelOffset(int8_t col, int8_t row) { setColRowStart(col, row); }
+};
+
+WaveshareST7789 tft(&SPI, PIN_LCD_CS, PIN_LCD_DC, PIN_LCD_RST);
 
 struct MonoAnimation {
   uint16_t frameCount;
@@ -156,6 +172,38 @@ void drawCenteredText(const String& text, int16_t y, uint8_t size, uint16_t colo
   int16_t x = (static_cast<int16_t>(tft.width()) - static_cast<int16_t>(w)) / 2;
   tft.setCursor(x, y);
   tft.print(text);
+}
+
+void runDisplaySelfTest() {
+  // 1) solid fills
+  tft.fillScreen(ST77XX_RED);
+  delay(220);
+  tft.fillScreen(ST77XX_GREEN);
+  delay(220);
+  tft.fillScreen(ST77XX_BLUE);
+  delay(220);
+
+  // 2) vertical bars
+  tft.fillScreen(ST77XX_BLACK);
+  const uint16_t barColors[] = {ST77XX_RED, ST77XX_GREEN, ST77XX_BLUE, ST77XX_YELLOW, ST77XX_CYAN, ST77XX_MAGENTA, ST77XX_WHITE};
+  const uint8_t bars = sizeof(barColors) / sizeof(barColors[0]);
+  const int16_t barW = tft.width() / bars;
+  for (uint8_t i = 0; i < bars; i++) {
+    tft.fillRect(i * barW, 0, barW, tft.height(), barColors[i]);
+  }
+  delay(350);
+
+  // 3) checkerboard (good at exposing row/column offset issues)
+  tft.fillScreen(ST77XX_BLACK);
+  const uint8_t cell = 12;
+  for (int16_t y = 0; y < tft.height(); y += cell) {
+    for (int16_t x = 0; x < tft.width(); x += cell) {
+      const bool on = ((x / cell) + (y / cell)) & 1;
+      tft.fillRect(x, y, cell, cell, on ? ST77XX_WHITE : ST77XX_BLACK);
+    }
+  }
+  drawCenteredText("SELF TEST", 8, 2, ST77XX_ORANGE);
+  delay(450);
 }
 
 const ExpressionConfig& getExpressionConfig(Expression expression) {
@@ -413,10 +461,13 @@ void setup() {
 
   SPI.begin(PIN_LCD_SCLK, PIN_LCD_MISO, PIN_LCD_MOSI, PIN_LCD_CS);
 
-  tft.init(LCD_WIDTH, LCD_HEIGHT);
+  tft.init(LCD_WIDTH, LCD_HEIGHT, SPI_MODE0);
+  tft.setSPISpeed(LCD_SPI_HZ);
+  tft.applyPanelOffset(LCD_COL_OFFSET, LCD_ROW_OFFSET);
   tft.setRotation(0); // 172x320 portrait
   tft.fillScreen(ST77XX_BLACK);
 
+  runDisplaySelfTest();
   playSound(SND_STARTUP, sizeof(SND_STARTUP) / sizeof(SND_STARTUP[0]));
 
   trySyncTimeWithNtp();
