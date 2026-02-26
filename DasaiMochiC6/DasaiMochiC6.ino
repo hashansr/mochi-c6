@@ -49,6 +49,10 @@ static constexpr uint8_t PIN_SD_CS = 4;
 // External modules
 static constexpr uint8_t PIN_SPEAKER = 3; // small speaker
 
+// Built-in BOOT button (usually GPIO9 on ESP32-C6 boards)
+static constexpr uint8_t PIN_BOOT_BUTTON = 9;
+static constexpr bool BOOT_BUTTON_ACTIVE_LOW = true;
+
 static constexpr uint16_t LCD_WIDTH = 172;
 static constexpr uint16_t LCD_HEIGHT = 320;
 
@@ -56,6 +60,7 @@ static constexpr uint16_t LCD_HEIGHT = 320;
 static constexpr uint32_t TOUCH_DEBOUNCE_MS = 30;
 static constexpr uint32_t DOUBLE_TAP_GAP_MS = 280;
 static constexpr uint32_t LONG_PRESS_MS = 700;
+static constexpr uint32_t BOOT_DEBOUNCE_MS = 30;
 
 // Touch 1.47 demo uses col/row offsets 34/0 and custom JD9853 init commands.
 // SPI can go higher; keep moderate default first for stability.
@@ -175,6 +180,11 @@ uint32_t gTouchPressStartMs = 0;
 bool gTouchLongFired = false;
 uint8_t gTapCount = 0;
 uint32_t gTapDeadlineMs = 0;
+
+// BOOT button tracking
+bool gBootStable = false;
+bool gBootLastRaw = false;
+uint32_t gBootLastChangeMs = 0;
 
 uint16_t safeDelayScaled(uint16_t baseMs, uint16_t percent) {
   uint32_t scaled = (static_cast<uint32_t>(baseMs) * percent) / 100;
@@ -565,26 +575,50 @@ void renderClock(uint32_t now) {
   drawCenteredText(getClockString(now), 138, 3, ST77XX_WHITE);
 
   if (gTimeSynced) {
-    drawCenteredText("long press: faces", 280, 1, ST77XX_GREEN);
+    drawCenteredText("boot/long press: faces", 280, 1, ST77XX_GREEN);
   } else {
     drawCenteredText("uptime time (no NTP)", 264, 1, ST77XX_MAGENTA);
-    drawCenteredText("long press: faces", 284, 1, ST77XX_GREEN);
+    drawCenteredText("boot/long press: faces", 284, 1, ST77XX_GREEN);
   }
+}
+
+void toggleFacesClockMode(bool withSound) {
+  if (withSound) {
+    playSound(SND_LONG, sizeof(SND_LONG) / sizeof(SND_LONG[0]));
+  }
+
+  if (gMode == AppMode::Faces) {
+    gMode = AppMode::Clock;
+    gLastClockDrawMs = 0;
+  } else {
+    gMode = AppMode::Faces;
+    setExpression(Expression::Idle);
+  }
+}
+
+bool pollBootButtonToggle(uint32_t now) {
+  const bool rawPressed = (digitalRead(PIN_BOOT_BUTTON) == (BOOT_BUTTON_ACTIVE_LOW ? LOW : HIGH));
+
+  if (rawPressed != gBootLastRaw) {
+    gBootLastRaw = rawPressed;
+    gBootLastChangeMs = now;
+  }
+
+  if ((now - gBootLastChangeMs) > BOOT_DEBOUNCE_MS && rawPressed != gBootStable) {
+    gBootStable = rawPressed;
+    if (gBootStable) {
+      return true; // toggle on press edge
+    }
+  }
+
+  return false;
 }
 
 void handleTouchEvent(TouchEvent event) {
   if (event == TouchEvent::None) return;
 
   if (event == TouchEvent::LongPress) {
-    playSound(SND_LONG, sizeof(SND_LONG) / sizeof(SND_LONG[0]));
-
-    if (gMode == AppMode::Faces) {
-      gMode = AppMode::Clock;
-      gLastClockDrawMs = 0;
-    } else {
-      gMode = AppMode::Faces;
-      setExpression(Expression::Idle);
-    }
+    toggleFacesClockMode(true);
     return;
   }
 
@@ -622,6 +656,12 @@ void setup() {
   digitalWrite(PIN_SD_CS, HIGH);
 
   pinMode(PIN_SPEAKER, OUTPUT);
+  pinMode(PIN_BOOT_BUTTON, INPUT_PULLUP);
+
+  const bool bootNow = (digitalRead(PIN_BOOT_BUTTON) == (BOOT_BUTTON_ACTIVE_LOW ? LOW : HIGH));
+  gBootLastRaw = bootNow;
+  gBootStable = bootNow;
+  gBootLastChangeMs = millis();
 
   SPI.begin(PIN_LCD_SCLK, PIN_LCD_MISO, PIN_LCD_MOSI, PIN_LCD_CS);
 
@@ -647,6 +687,11 @@ void loop() {
   const uint32_t now = millis();
 
   soundTick(now);
+
+  if (pollBootButtonToggle(now)) {
+    toggleFacesClockMode(true);
+  }
+
   handleTouchEvent(pollTouchEvent(now));
 
   if (gMode == AppMode::Clock) {

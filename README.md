@@ -79,6 +79,7 @@ If left empty, clock mode still works but shows uptime-based time instead of NTP
 - **Single tap** → cycle expressions (`IDLE -> HAPPY -> SLEEPY -> IDLE`)
 - **Double tap** → `ANGRY`
 - **Long press** → toggle **Clock mode** on/off
+- **BOOT button press** → toggle **Clock mode** on/off (test shortcut)
 
 ---
 
